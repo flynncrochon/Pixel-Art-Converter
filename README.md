@@ -2,6 +2,8 @@
 
 Pixel Art Converter is a small desktop app that turns regular images into pixel art with a live preview. It's an Electron front-end wrapped around the [proper-pixel-art](https://pypi.org/project/proper-pixel-art/) Python library, with a FastAPI sidecar handling the heavy lifting.
 
+![Pixel Art Converter](screenshots/example.png)
+
 ## Installation
 
 **Warning** You'll need Python and Node installed before the app is useful:
