@@ -11,6 +11,12 @@ Menu.setApplicationMenu(null);
 const { spawn } = require('child_process');
 const path = require('path');
 const net = require('net');
+const fs = require('fs');
+const fsp = require('fs').promises;
+
+const IMAGE_EXTS = new Set([
+  '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp', '.tif', '.tiff',
+]);
 
 let pyProc = null;
 let pyPort = null;
@@ -104,6 +110,47 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('ppa:get-port', () => pyPort);
   ipcMain.handle('ppa:is-ready', () => pyReady);
+
+  ipcMain.handle('ppa:pick-input-folder', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose folder of images to batch process',
+      properties: ['openDirectory'],
+    });
+    if (res.canceled || !res.filePaths.length) return null;
+    const folder = res.filePaths[0];
+    let entries;
+    try {
+      entries = await fsp.readdir(folder, { withFileTypes: true });
+    } catch (err) {
+      return { folder, files: [], error: err.message };
+    }
+    const files = entries
+      .filter((e) => e.isFile() && IMAGE_EXTS.has(path.extname(e.name).toLowerCase()))
+      .map((e) => ({ name: e.name, path: path.join(folder, e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return { folder, files };
+  });
+
+  ipcMain.handle('ppa:pick-output-folder', async () => {
+    const res = await dialog.showOpenDialog({
+      title: 'Choose output folder',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (res.canceled || !res.filePaths.length) return null;
+    return res.filePaths[0];
+  });
+
+  ipcMain.handle('ppa:read-image-b64', async (_evt, filePath) => {
+    const buf = await fsp.readFile(filePath);
+    return buf.toString('base64');
+  });
+
+  ipcMain.handle('ppa:save-image-b64', async (_evt, filePath, b64) => {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) await fsp.mkdir(dir, { recursive: true });
+    await fsp.writeFile(filePath, Buffer.from(b64, 'base64'));
+    return true;
+  });
 
   createWindow();
 

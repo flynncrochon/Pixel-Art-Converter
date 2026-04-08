@@ -35,6 +35,16 @@ const els = {
   selectBtn: document.getElementById('selectBtn'),
   selInfo: document.getElementById('selInfo'),
   selRect: document.getElementById('selRect'),
+  batchInputBtn: document.getElementById('batchInputBtn'),
+  batchInputInfo: document.getElementById('batchInputInfo'),
+  batchOutputBtn: document.getElementById('batchOutputBtn'),
+  batchOutputInfo: document.getElementById('batchOutputInfo'),
+  batchStartBtn: document.getElementById('batchStartBtn'),
+  batchCancelBtn: document.getElementById('batchCancelBtn'),
+  batchProgressWrap: document.getElementById('batchProgressWrap'),
+  batchProgressFill: document.getElementById('batchProgressFill'),
+  batchProgressLabel: document.getElementById('batchProgressLabel'),
+  batchStatus: document.getElementById('batchStatus'),
 };
 
 let port = null;
@@ -181,18 +191,12 @@ function scheduleRender(delay = 250) {
   debounceTimer = setTimeout(runRender, delay);
 }
 
-async function runRender() {
-  if (!sourceB64) return;
-  if (inflight) {
-    // mark that another render is needed; current one will trigger it on completion
-    pending = true;
-    return;
-  }
-  inflight = new AbortController();
-  els.busy.classList.remove('hidden');
-
+// Build a /pixelate request body from the current control state.
+// `imageB64` lets the batch loop substitute each file's bytes while keeping
+// every other setting identical to the live preview.
+function buildPixelateBody(imageB64) {
   const body = {
-    image_b64: sourceB64,
+    image_b64: imageB64,
     num_colors: Number(els.numColors.value),
     scale_result: 1,
     transparent_background: els.transparent.checked,
@@ -219,6 +223,20 @@ async function runRender() {
   }
   const pxwVal = Number(els.pxw.value);
   if (pxwVal > 0) body.pixel_width = pxwVal;
+  return body;
+}
+
+async function runRender() {
+  if (!sourceB64) return;
+  if (inflight) {
+    // mark that another render is needed; current one will trigger it on completion
+    pending = true;
+    return;
+  }
+  inflight = new AbortController();
+  els.busy.classList.remove('hidden');
+
+  const body = buildPixelateBody(sourceB64);
 
   const t0 = performance.now();
   try {
@@ -433,6 +451,118 @@ let selectMode = false;
   img.addEventListener('load', reset);
 })();
 
+// ---- batch processing ----
+let batchInputFolder = null;
+let batchInputFiles = [];   // [{ name, path }]
+let batchOutputFolder = null;
+let batchCancelRequested = false;
+let batchRunning = false;
+
+function updateBatchStartEnabled() {
+  els.batchStartBtn.disabled = !(
+    batchInputFiles.length > 0 && batchOutputFolder && !batchRunning
+  );
+}
+
+function setBatchProgress(done, total) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  els.batchProgressFill.style.width = `${pct}%`;
+  els.batchProgressLabel.textContent = `${pct}%`;
+}
+
+els.batchInputBtn.addEventListener('click', async () => {
+  const res = await window.ppa.pickInputFolder();
+  if (!res) return;
+  batchInputFolder = res.folder;
+  batchInputFiles = res.files || [];
+  if (batchInputFiles.length === 0) {
+    els.batchInputInfo.textContent = `${batchInputFolder} (no images found)`;
+  } else {
+    els.batchInputInfo.textContent =
+      `${batchInputFolder} (${batchInputFiles.length} image${batchInputFiles.length === 1 ? '' : 's'})`;
+  }
+  updateBatchStartEnabled();
+});
+
+els.batchOutputBtn.addEventListener('click', async () => {
+  const folder = await window.ppa.pickOutputFolder();
+  if (!folder) return;
+  batchOutputFolder = folder;
+  els.batchOutputInfo.textContent = folder;
+  updateBatchStartEnabled();
+});
+
+els.batchCancelBtn.addEventListener('click', () => {
+  if (!batchRunning) return;
+  batchCancelRequested = true;
+  els.batchStatus.textContent = 'cancelling…';
+});
+
+els.batchStartBtn.addEventListener('click', async () => {
+  if (batchRunning) return;
+  if (!batchInputFiles.length || !batchOutputFolder) return;
+
+  batchRunning = true;
+  batchCancelRequested = false;
+  updateBatchStartEnabled();
+  els.batchCancelBtn.classList.remove('hidden');
+  els.batchProgressWrap.classList.remove('hidden');
+  setBatchProgress(0, batchInputFiles.length);
+
+  // Path separator: assume Windows uses '\\' but accept either.
+  const sep = batchOutputFolder.includes('\\') ? '\\' : '/';
+
+  let done = 0;
+  let failures = 0;
+  const total = batchInputFiles.length;
+
+  for (const file of batchInputFiles) {
+    if (batchCancelRequested) break;
+    els.batchStatus.textContent = `processing ${file.name} (${done + 1}/${total})`;
+
+    try {
+      const inputB64 = await window.ppa.readImageB64(file.path);
+      const body = buildPixelateBody(inputB64);
+
+      const res = await fetch(`http://127.0.0.1:${port}/pixelate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const detail = await res.text();
+        throw new Error(`${res.status}: ${detail}`);
+      }
+      const json = await res.json();
+
+      // Output filename: same stem as the source, always written as PNG.
+      const dot = file.name.lastIndexOf('.');
+      const stem = dot > 0 ? file.name.slice(0, dot) : file.name;
+      const outPath = `${batchOutputFolder}${sep}${stem}.png`;
+      await window.ppa.saveImageB64(outPath, json.image_b64);
+    } catch (err) {
+      console.error(`batch failed on ${file.name}:`, err);
+      failures += 1;
+    }
+
+    done += 1;
+    setBatchProgress(done, total);
+  }
+
+  batchRunning = false;
+  els.batchCancelBtn.classList.add('hidden');
+  updateBatchStartEnabled();
+
+  if (batchCancelRequested) {
+    els.batchStatus.textContent = `cancelled at ${done}/${total}` +
+      (failures ? ` (${failures} failed)` : '');
+  } else {
+    els.batchStatus.textContent =
+      `done: ${done - failures}/${total} saved` +
+      (failures ? `, ${failures} failed` : '');
+  }
+});
+
 // ---- save output ----
 els.save.addEventListener('click', () => {
   if (!lastOutputB64) return;
@@ -440,6 +570,6 @@ els.save.addEventListener('click', () => {
   a.href = `data:image/png;base64,${lastOutputB64}`;
   const dot = sourceName.lastIndexOf('.');
   const stem = dot > 0 ? sourceName.slice(0, dot) : sourceName;
-  a.download = `${stem}_pixel.png`;
+  a.download = `${stem}.png`;
   a.click();
 });

@@ -122,6 +122,26 @@
         </label>
       </section>
 
+      <section class="controls outline-section batch-section">
+        <h3>Batch processing</h3>
+        <button id="batchInputBtn" type="button">Choose input folder…</button>
+        <div id="batchInputInfo" class="batch-info muted">no folder chosen</div>
+
+        <button id="batchOutputBtn" type="button">Choose output folder…</button>
+        <div id="batchOutputInfo" class="batch-info muted">no folder chosen</div>
+
+        <button id="batchStartBtn" type="button" disabled>Start batch</button>
+        <button id="batchCancelBtn" type="button" class="hidden">Cancel</button>
+
+        <div id="batchProgressWrap" class="batch-progress hidden">
+          <div class="batch-progress-bar">
+            <div id="batchProgressFill" class="batch-progress-fill"></div>
+          </div>
+          <div id="batchProgressLabel" class="batch-progress-label">0%</div>
+        </div>
+        <div id="batchStatus" class="batch-info muted"></div>
+      </section>
+
       <section class="meta" id="meta"></section>
     </aside>
 
