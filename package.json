@@ -1,0 +1,14 @@
+{
+  "name": "pixel-art-converter",
+  "version": "0.1.0",
+  "description": "Electron front-end for the proper-pixel-art Python library with live preview.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "setup:py": "python -m venv python/.venv && python/.venv/Scripts/pip install -r python/requirements.txt",
+    "setup:py:posix": "python3 -m venv python/.venv && python/.venv/bin/pip install -r python/requirements.txt"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}

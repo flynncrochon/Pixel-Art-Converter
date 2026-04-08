@@ -1,0 +1,5 @@
+proper-pixel-art
+fastapi
+uvicorn[standard]
+pillow
+pydantic>=2

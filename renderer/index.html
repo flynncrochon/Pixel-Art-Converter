@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://127.0.0.1:*;" />
+  <title>Pixel Art Converter</title>
+  <link rel="icon" type="image/svg+xml" href="icons/icon1-grid-pixel.svg" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Pixel Art Converter</h1>
+    <div class="status" id="status">starting sidecar…</div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="drop" id="drop">
+        <p><strong>Drop an image</strong></p>
+        <p class="muted">or</p>
+        <button id="pick">Choose file…</button>
+        <input type="file" id="file" accept="image/*" hidden />
+      </section>
+
+      <section class="controls">
+        <label class="checkbox">
+          <input type="checkbox" id="transparent" />
+          <span>Transparent background</span>
+        </label>
+
+        <label class="checkbox">
+          <input type="checkbox" id="keyEnabled" />
+          <span>Mask color → transparent</span>
+        </label>
+
+        <label>
+          <span>Key color</span>
+          <input type="color" id="keyColor" value="#ffffff" />
+        </label>
+
+        <label>
+          <span>Tolerance</span>
+          <span class="val" id="keyTolVal">0</span>
+          <input type="range" id="keyTol" min="0" max="200" value="0" step="1" />
+        </label>
+
+        <label class="checkbox">
+          <input type="checkbox" id="cleanEdges" checked />
+          <span>Remove edge speckles</span>
+        </label>
+
+        <label>
+          <span>
+            Manual pixel width
+            <small class="muted">(0 = auto)</small>
+          </span>
+          <span class="val" id="pxwVal">auto</span>
+          <input type="range" id="pxw" min="0" max="64" value="0" step="1" />
+        </label>
+
+        <button id="save" disabled>Save output…</button>
+      </section>
+
+      <section class="controls outline-section palette-section">
+        <h3>Palette</h3>
+        <label>
+          <span>Size</span>
+          <span class="val" id="numColorsVal">16</span>
+          <input type="range" id="numColors" min="2" max="64" value="16" step="1" />
+        </label>
+
+        <label>
+          <span>Preset</span>
+          <select id="palettePreset">
+            <option value="">None (auto)</option>
+            <option value="gameboy">Game Boy (4)</option>
+            <option value="gameboy_pocket">GB Pocket (4)</option>
+            <option value="nes">NES (54)</option>
+            <option value="pico8">PICO-8 (16)</option>
+            <option value="cga">CGA (16)</option>
+            <option value="sweetie16">Sweetie 16</option>
+            <option value="endesga32">Endesga 32</option>
+          </select>
+        </label>
+
+        <label>
+          <span>Saturation</span>
+          <span class="val" id="saturationVal">100%</span>
+          <input type="range" id="saturation" min="0" max="200" value="100" step="5" />
+        </label>
+
+        <label class="checkbox">
+          <input type="checkbox" id="dither" />
+          <span>Dithering (Floyd–Steinberg)</span>
+        </label>
+
+        <div class="palette-import">
+          <button id="importPaletteBtn" type="button">Import palette from image…</button>
+          <input type="file" id="paletteFile" accept="image/*" hidden />
+          <button id="clearPaletteBtn" type="button" class="hidden">Clear</button>
+        </div>
+        <div id="paletteSwatches" class="palette-swatches"></div>
+      </section>
+
+      <section class="controls outline-section">
+        <h3>Outline</h3>
+        <label class="checkbox">
+          <input type="checkbox" id="outline" />
+          <span>Black outline</span>
+        </label>
+
+        <label class="checkbox">
+          <input type="checkbox" id="outlineDiagonal" checked />
+          <span>Include diagonals</span>
+        </label>
+
+        <label>
+          <span>Thickness</span>
+          <span class="val" id="outlineThickVal">1</span>
+          <input type="range" id="outlineThick" min="1" max="8" value="1" step="1" />
+        </label>
+      </section>
+
+      <section class="meta" id="meta"></section>
+    </aside>
+
+    <section class="panes">
+      <div class="pane">
+        <h2>Source</h2>
+        <div class="img-wrap"><img id="srcImg" alt="" draggable="false" /></div>
+      </div>
+      <div class="pane">
+        <h2>Pixel art
+          <span id="busy" class="busy hidden">rendering…</span>
+          <button id="selectBtn" class="hdr-btn" type="button">Select region</button>
+          <span id="selInfo" class="sel-info"></span>
+        </h2>
+        <div class="img-wrap checker">
+          <img id="outImg" alt="" draggable="false" />
+          <div id="selRect" class="sel-rect hidden"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
