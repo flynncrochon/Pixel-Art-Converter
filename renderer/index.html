@@ -59,6 +59,15 @@
           <input type="range" id="pxw" min="0" max="64" value="0" step="1" />
         </label>
 
+        <label>
+          <span>
+            Snap height
+            <small class="muted">(0 = off, output height divisible by N)</small>
+          </span>
+          <span class="val" id="snapHeightVal">off</span>
+          <input type="range" id="snapHeight" min="0" max="64" value="0" step="1" />
+        </label>
+
         <button id="save" disabled>Save output…</button>
       </section>
 
@@ -85,9 +94,26 @@
         </label>
 
         <label>
+          <span>Hue shift</span>
+          <span class="val" id="hueShiftVal">0°</span>
+          <input type="range" id="hueShift" min="-180" max="180" value="0" step="5" />
+        </label>
+        <div class="hue-btns">
+          <button id="hueShiftNeg" type="button">−30°</button>
+          <button id="hueShiftReset" type="button">Reset</button>
+          <button id="hueShiftPos" type="button">+30°</button>
+        </div>
+
+        <label>
           <span>Saturation</span>
           <span class="val" id="saturationVal">100%</span>
           <input type="range" id="saturation" min="0" max="200" value="100" step="5" />
+        </label>
+
+        <label>
+          <span>Brightness</span>
+          <span class="val" id="brightnessVal">100%</span>
+          <input type="range" id="brightness" min="0" max="200" value="100" step="5" />
         </label>
 
         <label class="checkbox">
@@ -107,7 +133,12 @@
         <h3>Outline</h3>
         <label class="checkbox">
           <input type="checkbox" id="outline" />
-          <span>Black outline</span>
+          <span>Outer outline</span>
+        </label>
+
+        <label class="checkbox">
+          <input type="checkbox" id="outlineInward" />
+          <span>Inner outline</span>
         </label>
 
         <label class="checkbox">

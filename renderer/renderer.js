@@ -14,11 +14,19 @@ const els = {
   keyTol: document.getElementById('keyTol'),
   keyTolVal: document.getElementById('keyTolVal'),
   outline: document.getElementById('outline'),
+  outlineInward: document.getElementById('outlineInward'),
   outlineDiagonal: document.getElementById('outlineDiagonal'),
   outlineThick: document.getElementById('outlineThick'),
   outlineThickVal: document.getElementById('outlineThickVal'),
+  hueShift: document.getElementById('hueShift'),
+  hueShiftVal: document.getElementById('hueShiftVal'),
+  hueShiftNeg: document.getElementById('hueShiftNeg'),
+  hueShiftPos: document.getElementById('hueShiftPos'),
+  hueShiftReset: document.getElementById('hueShiftReset'),
   saturation: document.getElementById('saturation'),
   saturationVal: document.getElementById('saturationVal'),
+  brightness: document.getElementById('brightness'),
+  brightnessVal: document.getElementById('brightnessVal'),
   palettePreset: document.getElementById('palettePreset'),
   dither: document.getElementById('dither'),
   importPaletteBtn: document.getElementById('importPaletteBtn'),
@@ -27,6 +35,8 @@ const els = {
   paletteSwatches: document.getElementById('paletteSwatches'),
   pxw: document.getElementById('pxw'),
   pxwVal: document.getElementById('pxwVal'),
+  snapHeight: document.getElementById('snapHeight'),
+  snapHeightVal: document.getElementById('snapHeightVal'),
   save: document.getElementById('save'),
   meta: document.getElementById('meta'),
   srcImg: document.getElementById('srcImg'),
@@ -114,15 +124,37 @@ function wireSlider(input, label, fmt) {
 wireSlider(els.numColors, els.numColorsVal, (v) => v);
 wireSlider(els.pxw,       els.pxwVal,       (v) => (v === '0' ? 'auto' : v));
 wireSlider(els.outlineThick, els.outlineThickVal, (v) => v);
+wireSlider(els.hueShift, els.hueShiftVal, (v) => `${v}°`);
 wireSlider(els.saturation, els.saturationVal, (v) => `${v}%`);
+wireSlider(els.brightness, els.brightnessVal, (v) => `${v}%`);
+
+function stepHue(delta) {
+  const next = Math.max(-180, Math.min(180, Number(els.hueShift.value) + delta));
+  els.hueShift.value = next;
+  els.hueShiftVal.textContent = `${next}°`;
+  scheduleRender();
+}
+els.hueShiftNeg.addEventListener('click', () => stepHue(-30));
+els.hueShiftPos.addEventListener('click', () => stepHue(30));
+els.hueShiftReset.addEventListener('click', () => {
+  els.hueShift.value = 0;
+  els.hueShiftVal.textContent = '0°';
+  scheduleRender();
+});
 wireSlider(els.keyTol, els.keyTolVal, (v) => v);
 els.keyEnabled.addEventListener('change', () => scheduleRender());
 els.keyColor.addEventListener('input', () => scheduleRender());
 els.transparent.addEventListener('change', () => scheduleRender());
 els.cleanEdges.addEventListener('change', () => scheduleRender());
 els.outline.addEventListener('change', () => scheduleRender());
+els.outlineInward.addEventListener('change', () => scheduleRender());
 els.outlineDiagonal.addEventListener('change', () => scheduleRender());
 els.dither.addEventListener('change', () => scheduleRender());
+els.snapHeight.addEventListener('input', () => {
+  const v = Number(els.snapHeight.value);
+  els.snapHeightVal.textContent = v === 0 ? 'off' : v;
+  scheduleRender();
+});
 els.palettePreset.addEventListener('change', () => {
   // Choosing a preset clears any imported palette.
   if (els.palettePreset.value) {
@@ -202,10 +234,13 @@ function buildPixelateBody(imageB64) {
     transparent_background: els.transparent.checked,
     clean_edges: els.cleanEdges.checked,
     outline: els.outline.checked,
+    outline_inward: els.outlineInward.checked,
     outline_thickness: Number(els.outlineThick.value),
     outline_diagonal: els.outlineDiagonal.checked,
     dither: els.dither.checked,
+    hue_shift: Number(els.hueShift.value),
     saturation: Number(els.saturation.value) / 100,
+    brightness: Number(els.brightness.value) / 100,
   };
   if (els.keyEnabled.checked) {
     const hex = els.keyColor.value;
@@ -223,17 +258,20 @@ function buildPixelateBody(imageB64) {
   }
   const pxwVal = Number(els.pxw.value);
   if (pxwVal > 0) body.pixel_width = pxwVal;
+  const sh = Number(els.snapHeight.value);
+  if (sh > 0) body.snap_height = sh;
   return body;
 }
 
 async function runRender() {
   if (!sourceB64) return;
   if (inflight) {
-    // mark that another render is needed; current one will trigger it on completion
-    pending = true;
-    return;
+    // Abort the stale request so we can start a fresh one with current settings.
+    inflight.abort();
   }
-  inflight = new AbortController();
+  const ac = new AbortController();
+  inflight = ac;
+  pending = false;
   els.busy.classList.remove('hidden');
 
   const body = buildPixelateBody(sourceB64);
@@ -244,7 +282,7 @@ async function runRender() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: inflight.signal,
+      signal: ac.signal,
     });
     if (!res.ok) {
       const detail = await res.text();
@@ -269,11 +307,10 @@ async function runRender() {
       els.status.classList.add('err');
     }
   } finally {
-    inflight = null;
-    els.busy.classList.add('hidden');
-    if (pending) {
-      pending = false;
-      scheduleRender(0);
+    // Only clear inflight if no newer request has replaced us.
+    if (inflight === ac) {
+      inflight = null;
+      els.busy.classList.add('hidden');
     }
   }
 }
@@ -420,15 +457,20 @@ let selectMode = false;
 
   wrap.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const rect = img.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-    const ix = mx / zoom, iy = my / zoom;
-    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-    const nz = Math.min(40, Math.max(0.2, zoom * factor));
-    panX += mx - ix * nz - (mx - ix * zoom);
-    panY += my - iy * nz - (my - iy * zoom);
-    zoom = nz;
+    if (e.ctrlKey) {
+      const rect = img.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const ix = mx / zoom, iy = my / zoom;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const nz = Math.min(40, Math.max(0.2, zoom * factor));
+      panX += mx - ix * nz - (mx - ix * zoom);
+      panY += my - iy * nz - (my - iy * zoom);
+      zoom = nz;
+    } else {
+      panX -= e.deltaX;
+      panY -= e.deltaY;
+    }
     apply();
   }, { passive: false });
 

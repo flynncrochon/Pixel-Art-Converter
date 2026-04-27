@@ -38,6 +38,7 @@ html, body {
 .layout {
   display: grid;
   grid-template-columns: 280px 1fr;
+  grid-template-rows: minmax(0, 1fr);
   height: calc(100vh - 41px);
 }
 
@@ -49,6 +50,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-height: 0;
 }
 
 .drop {
@@ -114,6 +116,23 @@ html, body {
   padding: 4px 6px;
   font: inherit;
 }
+.hue-btns {
+  display: flex;
+  gap: 6px;
+}
+.hue-btns button {
+  flex: 1;
+  background: var(--bg3);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 5px 4px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.hue-btns button:hover { border-color: var(--accent); }
+
 .palette-import { display: flex; gap: 6px; }
 .palette-import button {
   flex: 1;

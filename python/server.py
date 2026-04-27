@@ -22,8 +22,45 @@ from proper_pixel_art import colors as ppa_colors, utils as ppa_utils
 from proper_pixel_art.pixelate import pixelate
 
 
+def _quantize_opaque_only(image: Image.Image, num_colors: int,
+                          alpha_threshold: int = 128) -> Image.Image:
+    """Quantize only the opaque pixels of an RGBA image.
+
+    Unlike the library's palette_img(), this never composites transparent
+    pixels onto a background color, so the background can't pollute the
+    quantized palette.
+
+    Returns an RGB image the same size as the input.  Pixels where
+    alpha < threshold have undefined RGB values (caller must use the
+    original alpha to mask them out).
+    """
+    if image.mode != "RGBA":
+        image = image.convert("RGBA")
+
+    arr = np.array(image)
+    alpha = arr[..., 3]
+    opaque_mask = alpha >= alpha_threshold
+
+    if not opaque_mask.any():
+        return Image.new("RGB", image.size, (0, 0, 0))
+
+    rgb = arr[..., :3].copy()
+    opaque_pixels = rgb[opaque_mask]
+    median_color = np.median(opaque_pixels, axis=0).astype(np.uint8)
+    rgb[~opaque_mask] = median_color
+
+    rgb_img = Image.fromarray(rgb, "RGB")
+    quantized = rgb_img.quantize(
+        colors=num_colors,
+        method=Image.Quantize.MAXCOVERAGE,
+        dither=Image.Dither.NONE,
+    )
+    return quantized.convert("RGB")
+
+
 def block_pixelate(image: Image.Image, pixel_width: int,
-                   num_colors: int | None) -> Image.Image:
+                   num_colors: int | None,
+                   snap_height: int = 0) -> Image.Image:
     """Pixel-perfect block downsample: pack N x N source pixels into one cell.
 
     Bypasses proper_pixel_art's mesh-detection pipeline (which silently
@@ -34,6 +71,11 @@ def block_pixelate(image: Image.Image, pixel_width: int,
       - pixel_width=1 -> output dims == input dims (true 1:1)
       - pixel_width=N -> ceil(W/N) x ceil(H/N)
 
+    When snap_height > 0, the source is upscaled so the output height (after
+    the block downsample) is exactly divisible by snap_height.  For example,
+    with pixel_width=6 and snap_height=8, a 12800-tall source becomes 12816
+    (2136 output rows, 2136/8 = 267 exactly).
+
     Cell colors are picked with the same helpers the library uses, so the
     look matches the auto-pixel-width path.
     """
@@ -41,11 +83,24 @@ def block_pixelate(image: Image.Image, pixel_width: int,
         image = image.convert("RGBA")
     width, height = image.size
     pw = max(1, int(pixel_width))
+
+    # Snap: upscale source so the *output* height is divisible by snap_height,
+    # scaling width by the same ratio to preserve aspect ratio.
+    if snap_height > 0 and pw > 1:
+        raw_out_h = (height + pw - 1) // pw          # normal ceil output rows
+        rem = raw_out_h % snap_height
+        if rem != 0:
+            target_out_h = raw_out_h + (snap_height - rem)  # next multiple
+            new_h = target_out_h * pw                        # required source height
+            new_w = round(width * (new_h / height))          # same scale ratio
+            image = image.resize((new_w, new_h), Image.NEAREST)
+            width, height = new_w, new_h
+
     rgba_arr = np.array(image)
 
     if num_colors is not None:
-        quantized = ppa_colors.palette_img(image, num_colors=num_colors)
-        rgb_arr = np.array(quantized.convert("RGB"))
+        quantized_rgb = _quantize_opaque_only(image, num_colors=num_colors)
+        rgb_arr = np.array(quantized_rgb)
     else:
         rgb_arr = None
 
@@ -57,7 +112,7 @@ def block_pixelate(image: Image.Image, pixel_width: int,
         return Image.fromarray(out, mode="RGBA")
 
     out_w = (width + pw - 1) // pw
-    out_h = (height + pw - 1) // pw
+    out_h = height // pw
     out = np.zeros((out_h, out_w, 4), dtype=np.uint8)
 
     for j in range(out_h):
@@ -70,8 +125,15 @@ def block_pixelate(image: Image.Image, pixel_width: int,
                 cell = rgba_arr[y0:y1, x0:x1]
                 out[j, i] = ppa_colors.get_cell_color_skip_quantization(cell)
             else:
-                cell_rgb = rgb_arr[y0:y1, x0:x1]
+                cell_rgb = rgb_arr[y0:y1, x0:x1].copy()
                 cell_a = rgba_arr[y0:y1, x0:x1, 3]
+                # Neutralize transparent pixels' RGB so they can't win
+                # the "most common color" vote in edge cells.
+                transparent = cell_a < 128
+                if transparent.any() and not transparent.all():
+                    opaque_px = cell_rgb[~transparent]
+                    med = np.median(opaque_px.reshape(-1, 3), axis=0).astype(np.uint8)
+                    cell_rgb[transparent] = med
                 out[j, i] = ppa_colors.get_cell_color_with_alpha(cell_rgb, cell_a)
 
     return Image.fromarray(out, mode="RGBA")
@@ -149,6 +211,37 @@ def add_outline(img: Image.Image, thickness: int = 1,
     arr[border] = (color[0], color[1], color[2], 255)
     return Image.fromarray(arr, "RGBA")
 
+
+def add_inner_outline(img: Image.Image, thickness: int = 1,
+                      color: tuple[int, int, int] = (0, 0, 0),
+                      diagonal: bool = True) -> Image.Image:
+    """Paint an outline on the inner border of the opaque region.
+
+    Erodes the alpha mask by `thickness` pixels; the pixels that were opaque
+    but fall outside the eroded mask form the inner border and are painted
+    with `color`. The image size is unchanged.
+    """
+    if thickness <= 0:
+        return img
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    arr = np.array(img)
+    alpha = arr[..., 3]
+    opaque = (alpha > 0).astype(np.uint8)
+
+    k = 2 * thickness + 1
+    if diagonal:
+        kernel = np.ones((k, k), np.uint8)
+    else:
+        kernel = cv2.getStructuringElement(cv2.MORPH_CROSS, (k, k))
+    eroded = cv2.erode(opaque, kernel, iterations=1)
+
+    inner_border = (opaque > 0) & (eroded == 0)
+    if not inner_border.any():
+        return img
+    arr[inner_border] = (color[0], color[1], color[2], 255)
+    return Image.fromarray(arr, "RGBA")
+
 # ---- Palette presets (RGB tuples) ----
 PALETTE_PRESETS: dict[str, list[tuple[int, int, int]]] = {
     "gameboy": [
@@ -222,6 +315,22 @@ def _palette_to_pil(palette: list[tuple[int, int, int]]) -> Image.Image:
     return pal_img
 
 
+def shift_hue(img: Image.Image, degrees: float) -> Image.Image:
+    """Rotate all pixel hues by `degrees` (-180..180). Alpha untouched."""
+    if abs(degrees) < 0.5:
+        return img
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    arr = np.array(img)
+    rgb = arr[..., :3].astype(np.uint8)
+    # cv2 HSV: H is 0-179 (half-degree units)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.int32)
+    hsv[..., 0] = (hsv[..., 0] + round(degrees / 2)) % 180
+    rgb_out = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    arr[..., :3] = rgb_out
+    return Image.fromarray(arr, "RGBA")
+
+
 def adjust_saturation(img: Image.Image, factor: float) -> Image.Image:
     """Scale RGB saturation by `factor` (1.0 = no change). Alpha untouched."""
     if abs(factor - 1.0) < 1e-3:
@@ -234,6 +343,20 @@ def adjust_saturation(img: Image.Image, factor: float) -> Image.Image:
     luma = (0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2])[..., None]
     out = luma + (rgb - luma) * float(factor)
     arr[..., :3] = np.clip(out, 0, 255).astype(np.uint8)
+    return Image.fromarray(arr, "RGBA")
+
+
+def adjust_brightness(img: Image.Image, factor: float) -> Image.Image:
+    """Scale HSV value by `factor` (1.0 = no change). Alpha untouched."""
+    if abs(factor - 1.0) < 1e-3:
+        return img
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
+    arr = np.array(img)
+    rgb = arr[..., :3].astype(np.uint8)
+    hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV).astype(np.float32)
+    hsv[..., 2] = np.clip(hsv[..., 2] * float(factor), 0, 255)
+    arr[..., :3] = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
     return Image.fromarray(arr, "RGBA")
 
 
@@ -259,14 +382,25 @@ def apply_palette(img: Image.Image,
 
 def extract_palette_from_image(img: Image.Image,
                                max_colors: int = 32) -> list[tuple[int, int, int]]:
-    """Reduce an image to its dominant colors via median-cut."""
+    """Reduce an image to its dominant colors via median-cut.
+
+    Only samples opaque pixels (alpha >= 128) so that the background
+    fill for transparent regions doesn't pollute the palette.
+    """
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    # Drop fully-transparent pixels by compositing on a neutral background
-    # we then ignore — quantize works on RGB.
-    rgb = Image.new("RGB", img.size)
-    rgb.paste(img, mask=img.split()[3])
-    q = rgb.quantize(colors=max_colors, method=Image.Quantize.MEDIANCUT)
+    arr = np.array(img)
+    alpha = arr[..., 3]
+    opaque_mask = alpha >= 128
+
+    if not opaque_mask.any():
+        return [(0, 0, 0)]
+
+    # Build a 1-row strip image from only the opaque pixels.
+    opaque_rgb = arr[..., :3][opaque_mask]  # shape (N, 3)
+    n = len(opaque_rgb)
+    strip = Image.fromarray(opaque_rgb.reshape(1, n, 3), "RGB")
+    q = strip.quantize(colors=max_colors, method=Image.Quantize.MEDIANCUT)
     pal = q.getpalette() or []
     used = sorted(set(q.getdata()))
     out: list[tuple[int, int, int]] = []
@@ -298,14 +432,18 @@ class PixelateRequest(BaseModel):
     pixel_width: int | None = Field(None, ge=1, le=512)
     clean_edges: bool = True
     outline: bool = False
+    outline_inward: bool = False
     outline_thickness: int = Field(1, ge=1, le=16)
     outline_diagonal: bool = True
     dither: bool = False
     saturation: float = Field(1.0, ge=0.0, le=4.0)
+    brightness: float = Field(1.0, ge=0.0, le=4.0)
+    hue_shift: float = Field(0.0, ge=-180.0, le=180.0)
     palette: list[tuple[int, int, int]] | None = None
     palette_preset: str | None = None
     key_color: tuple[int, int, int] | None = None
     key_tolerance: int = Field(0, ge=0, le=441)
+    snap_height: int = Field(0, ge=0, le=64)
 
 
 class ExtractPaletteRequest(BaseModel):
@@ -360,6 +498,7 @@ def do_pixelate(req: PixelateRequest) -> PixelateResponse:
             # true N-to-1 downsample of the source (pixel_width=1 -> input dims).
             result = block_pixelate(
                 src, pixel_width=req.pixel_width, num_colors=quant_colors,
+                snap_height=req.snap_height,
             )
             if req.transparent_background:
                 result = ppa_colors.make_background_transparent(result)
@@ -377,13 +516,25 @@ def do_pixelate(req: PixelateRequest) -> PixelateResponse:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"pixelate failed: {exc}") from exc
 
-    # Saturation adjustment runs before palette mapping so quantization
-    # snaps to the desaturated/boosted colors rather than the originals.
+    # Hue shift and saturation run before palette mapping so quantization
+    # snaps to the adjusted colors rather than the originals.
+    if abs(req.hue_shift) >= 0.5:
+        try:
+            result = shift_hue(result, req.hue_shift)
+        except Exception as exc:
+            log.warning("hue shift failed: %s", exc)
+
     if abs(req.saturation - 1.0) > 1e-3:
         try:
             result = adjust_saturation(result, req.saturation)
         except Exception as exc:
             log.warning("saturation adjust failed: %s", exc)
+
+    if abs(req.brightness - 1.0) > 1e-3:
+        try:
+            result = adjust_brightness(result, req.brightness)
+        except Exception as exc:
+            log.warning("brightness adjust failed: %s", exc)
 
     # Apply explicit palette + optional dithering after pixelation.
     if chosen_palette is not None or req.dither:
@@ -429,12 +580,17 @@ def do_pixelate(req: PixelateRequest) -> PixelateResponse:
 
     if req.outline:
         try:
-            # Scale outline thickness so it's measured in source pixels, not
-            # post-zoom pixels — one "pixel" of outline = one art pixel.
             t = req.outline_thickness * max(1, req.scale_result)
             result = add_outline(result, thickness=t, diagonal=req.outline_diagonal)
         except Exception as exc:
             log.warning("outline failed, returning raw result: %s", exc)
+
+    if req.outline_inward:
+        try:
+            t = req.outline_thickness * max(1, req.scale_result)
+            result = add_inner_outline(result, thickness=t, diagonal=req.outline_diagonal)
+        except Exception as exc:
+            log.warning("inner outline failed, returning raw result: %s", exc)
 
     buf = io.BytesIO()
     result.save(buf, format="PNG")
